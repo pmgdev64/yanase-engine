@@ -10,10 +10,11 @@ import org.w3c.dom.UserDataHandler;
 import vn.pmgteam.yanase.node.Object2D;
 import vn.pmgteam.yanase.node.BaseNode;
 import vn.pmgteam.yanase.gui.IClickable;
+import vn.pmgteam.yanase.gui.IResizable;
 import vn.pmgteam.yanase.gui.FontRenderer; // FontRenderer bạn vừa viết
 import vn.pmgteam.yanase.base.Engine;      // Giả sử FontRenderer nằm trong Engine
 
-public class Button2D extends Object2D implements IClickable {
+public class Button2D extends Object2D implements IClickable, IResizable {
 
     private float width, height;
     private float[] color = {0.25f, 0.25f, 0.25f}; 
@@ -29,6 +30,21 @@ public class Button2D extends Object2D implements IClickable {
         this.width = w;
         this.height = h;
     }
+    
+    @Override
+    public void setWidth(float width) { 
+        this.width = width; 
+        this.needsTextUpdate = true; // Cập nhật lại vị trí text khi size đổi
+    }
+
+    @Override
+    public void setHeight(float height) { this.height = height; }
+    
+    @Override
+    public float getWidth() { return width; }
+    
+    @Override
+    public float getHeight() { return height; }
 
     public Button2D(String name, float x, float y, float w, float h) {
         super(name);

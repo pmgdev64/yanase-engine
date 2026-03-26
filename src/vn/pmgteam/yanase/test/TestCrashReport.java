@@ -18,7 +18,8 @@ public class TestCrashReport {
             
             // Goi ham make de sinh file log voi ma loi Emergency Exit
             // Day la luc "di chuc" duoc viet ra
-            CrashReport.make(CrashReport.ERR_EMERGENCY_EXIT, mockRamUsage);
+         // Trong file TestCrashReport.java của bạn
+            CrashReport.make(CrashReport.ERR_EMERGENCY_EXIT, mockRamUsage, null);
             
             System.out.println("[Test] Crash Report da duoc khoi tao. Kiem tra thu muc du an.");
         } else {

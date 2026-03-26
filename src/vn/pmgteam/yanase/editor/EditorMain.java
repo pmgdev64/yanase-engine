@@ -11,7 +11,7 @@ public class EditorMain extends Engine {
     public void onInit() {
         // 1. Khởi tạo Camera riêng cho Editor
         // CameraNode sẽ giúp bạn điều hướng quanh các model như Mahiro dễ dàng hơn
-        vn.pmgteam.yanase.node.CameraNode editorCamera = new vn.pmgteam.yanase.node.CameraNode("EditorCamera");
+        vn.pmgteam.yanase.node.subnodes.CameraNode editorCamera = new vn.pmgteam.yanase.node.subnodes.CameraNode("EditorCamera");
         editorCamera.position.set(10, 10, 10); 
         editorCamera.rotation.set(30, -45, 0); // Nhìn chéo từ trên xuống Grid
         

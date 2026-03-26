@@ -1,6 +1,9 @@
 package vn.pmgteam.yanase.node;
 
 import org.w3c.dom.*;
+
+import vn.pmgteam.yanase.base.Engine;
+
 import java.util.ArrayList;
 import java.util.List;
 
@@ -20,6 +23,10 @@ public abstract class BaseNode implements Node {
     public List<BaseNode> getChildren() {
         return children;
     }
+    
+    public BaseNode getParent() {
+    	return parent;
+    }
 
     public void cleanup() {
         for (BaseNode child : children) {
@@ -28,18 +35,36 @@ public abstract class BaseNode implements Node {
         children.clear();
     }
     
-    // Thêm vào BaseNode.java
+    public Object3D getSceneRoot() {
+    	return Engine.getEngine().getSceneRoot();
+    }
+    
+
+ // Trong BaseNode.java
     public float getGlobalX() {
-        float gx = (this instanceof Object2D) ? ((Object2D)this).position.x : 0;
-        BaseNode p = (BaseNode) getParentNode();
-        if (p != null) gx += p.getGlobalX();
+        float gx = 0;
+        if (this instanceof vn.pmgteam.yanase.node.Object2D) {
+            // Truy cập vào field position (Vector2f) của Object2D
+            gx = ((vn.pmgteam.yanase.node.Object2D) this).position.x;
+        }
+        
+        org.w3c.dom.Node p = getParentNode();
+        if (p instanceof BaseNode) {
+            gx += ((BaseNode) p).getGlobalX();
+        }
         return gx;
     }
 
     public float getGlobalY() {
-        float gy = (this instanceof Object2D) ? ((Object2D)this).position.y : 0;
-        BaseNode p = (BaseNode) getParentNode();
-        if (p != null) gy += p.getGlobalY();
+        float gy = 0;
+        if (this instanceof vn.pmgteam.yanase.node.Object2D) {
+            gy = ((vn.pmgteam.yanase.node.Object2D) this).position.y;
+        }
+        
+        org.w3c.dom.Node p = getParentNode();
+        if (p instanceof BaseNode) {
+            gy += ((BaseNode) p).getGlobalY();
+        }
         return gy;
     }
 

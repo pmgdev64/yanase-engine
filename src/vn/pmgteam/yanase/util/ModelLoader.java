@@ -4,7 +4,7 @@ import de.javagl.jgltf.model.*;
 import de.javagl.jgltf.model.io.GltfModelReader;
 import de.javagl.jgltf.model.v2.MaterialModelV2;
 import vn.pmgteam.yanase.mesh.Mesh;
-import vn.pmgteam.yanase.node.Model3D;
+import vn.pmgteam.yanase.node.subnodes.Model3D;
 
 import org.lwjgl.BufferUtils;
 import org.lwjgl.stb.STBImage;

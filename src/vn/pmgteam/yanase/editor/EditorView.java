@@ -4,8 +4,8 @@ import static org.lwjgl.opengl.GL11.*;
 import org.joml.Matrix4f;
 
 import vn.pmgteam.yanase.base.Engine;
-import vn.pmgteam.yanase.node.CameraNode;
 import vn.pmgteam.yanase.node.Object3D;
+import vn.pmgteam.yanase.node.subnodes.CameraNode;
 
 public class EditorView extends Engine {
 

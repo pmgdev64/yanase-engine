@@ -2,8 +2,8 @@ package vn.pmgteam.yanase.util;
 
 import org.joml.Vector3f;
 import vn.pmgteam.yanase.node.Object3D;
+import vn.pmgteam.yanase.node.subnodes.CameraNode;
 import vn.pmgteam.yanase.node.BaseNode;
-import vn.pmgteam.yanase.node.CameraNode;
 
 public class Raycaster {
     private static final float MAX_DISTANCE = 100.0f;
@@ -25,20 +25,16 @@ public class Raycaster {
     }
 
     private static void searchRecursive(Vector3f origin, Vector3f direction, BaseNode node) {
-        // Chỉ kiểm tra nếu là Object3D và không phải Camera
-        if (node instanceof Object3D && !(node instanceof CameraNode)) {
+        if (node instanceof Object3D && !(node instanceof CameraNode)
+                // ← THÊM: skip GroupNode vì nó không có mesh để click
+                && !(node instanceof vn.pmgteam.yanase.node.subnodes.GroupNode)) {
             Object3D obj = (Object3D) node;
-            
-            // Tính khoảng cách va chạm
-            float dist = intersectSphere(origin, direction, obj.position, 1.2f); // Bán kính 1.2f để dễ chọn hơn chút
-            
+            float dist = intersectSphere(origin, direction, obj.position, 1.2f);
             if (dist > 0 && dist < minDistance) {
                 minDistance = dist;
                 closestObject = obj;
             }
         }
-
-        // Đệ quy xuống các con
         for (BaseNode child : node.getChildren()) {
             searchRecursive(origin, direction, child);
         }

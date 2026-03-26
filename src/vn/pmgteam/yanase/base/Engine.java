@@ -4,6 +4,7 @@ import org.joml.Matrix4f;
 import org.joml.Vector3f;
 import org.lwjgl.glfw.GLFW;
 import org.lwjgl.glfw.GLFWImage;
+import org.lwjgl.glfw.GLFWVidMode;
 import org.lwjgl.opengl.GL;
 import org.lwjgl.stb.STBImage;
 import org.lwjgl.system.MemoryStack;
@@ -17,11 +18,13 @@ import vn.pmgteam.yanase.base.render.RenderingHints;
 import vn.pmgteam.yanase.gui.FontRenderer;
 import vn.pmgteam.yanase.gui.IClickable;
 import vn.pmgteam.yanase.node.BaseNode;
-import vn.pmgteam.yanase.node.CameraMode;
-import vn.pmgteam.yanase.node.CameraNode;
 import vn.pmgteam.yanase.node.Object3D;
+import vn.pmgteam.yanase.node.subnodes.CameraMode;
+import vn.pmgteam.yanase.node.subnodes.CameraNode;
 import vn.pmgteam.yanase.scene.BaseScene;
+import vn.pmgteam.yanase.scene.SceneManager;
 import vn.pmgteam.yanase.settings.GameSettings;
+import vn.pmgteam.yanase.test.WorldScene;
 import vn.pmgteam.yanase.util.Raycaster;
 import vn.pmgteam.yanase.util.TextureManager;
 
@@ -67,6 +70,7 @@ public abstract class Engine implements Runnable {
     protected CameraNode mainCamera;
     
     private BaseScene activeScene;
+    protected boolean running = false;
     
     private boolean isEmergencyClosing = false;
     
@@ -79,10 +83,26 @@ public abstract class Engine implements Runnable {
     private Object3D hoveredObject = null;
     private Object3D selectedNode = null;
     
- // Một chu kỳ ngày đêm tính bằng giây (ví dụ: 600 giây = 10 phút)
-    private float dayCycleLength = 800.0f; 
+    // Một chu kỳ ngày đêm tính bằng giây (ví dụ: 600 giây = 10 phút)
+    private float dayCycleLength = 600.0f; 
     private float worldTime = 0.25f; // Bắt đầu ở 0.25 (Bình minh)
+    
+    public SceneManager sceneManager;
+       
+    // Thêm một flag để Engine tự nhận biết môi trường
+    private boolean isEditorMode = false;
 
+    public boolean isRunning() {
+        return running;
+    }
+    
+    public SceneManager getSceneManager() {
+    	return sceneManager;
+    }
+    
+ // Khai báo ở đầu class Engine
+    private final org.joml.Matrix4f worldMatrix = new org.joml.Matrix4f();
+    
     public Object3D sceneRoot = new Object3D("Scene Root") {
         @Override public void render() {}
         @Override public void setNodeValue(String v) throws DOMException {}
@@ -145,19 +165,131 @@ public abstract class Engine implements Runnable {
         }
     }
 
-    public void startApplication() { this.run(); }
+    public void startApplication() {
+        // --- PRE-FLIGHT RAM CHECK ---
+        if (!isSystemHealthy()) {
+            System.err.println("[SystemGuard] Khởi động thất bại: Không đủ tài nguyên hệ thống.");
+            // Bạn có thể hiện một Message Box đơn giản ở đây trước khi exit
+            return; 
+        }
 
+        System.out.println("[SystemGuard] RAM Check Passed. Khởi động Yanase Engine...");
+        this.run();
+    }
+
+    private boolean isSystemHealthy() {
+        // --- 1. CONFIGURATION ---
+        final long CRITICAL_RAM_MB = 180; // Dưới mức này Windows 11 sẽ bắt đầu "ngáp"
+        final long WARNING_RAM_MB = 350;  // Mức khuyến cáo để chạy mượt
+        
+        System.out.println("[SystemGuard] Đang phân tích tài nguyên hệ thống...");
+
+        try {
+            oshi.SystemInfo si = new oshi.SystemInfo();
+            var memory = si.getHardware().getMemory();
+            
+            // --- 2. FORCED CLEANUP ---
+            // Thử gọi GC để dọn dẹp các object rác từ quá trình init class trước đó
+            System.gc();
+            Thread.sleep(50); // Nghỉ một chút để GC kịp làm việc
+
+            // --- 3. PHYSICAL RAM CHECK ---
+            long availableBytes = memory.getAvailable();
+            long totalBytes = memory.getTotal();
+            long availableMB = availableBytes / (1024 * 1024);
+            double percentFree = (double) availableBytes / totalBytes * 100.0;
+
+            // --- 4. VIRTUAL MEMORY (PAGEFILE) CHECK ---
+            // Nếu Pagefile đã đầy > 90%, máy sẽ cực lag dù RAM còn trống
+            long swapUsed = memory.getVirtualMemory().getSwapUsed();
+            long swapTotal = memory.getVirtualMemory().getSwapTotal();
+            double swapUsagePercent = (swapTotal > 0) ? (double) swapUsed / swapTotal * 100.0 : 0;
+
+            // --- 5. LOGGING DETAILED REPORT ---
+            System.out.printf("[SystemGuard] RAM trống: %d MB (%.1f%%)\n", availableMB, percentFree);
+            System.out.printf("[SystemGuard] Pagefile usage: %.1f%%\n", swapUsagePercent);
+
+            // --- 6. TRIỆT ĐỂ: CÁC ĐIỀU KIỆN TỪ CHỐI ---
+            
+            // Điều kiện 1: RAM vật lý quá thấp
+            if (availableMB < CRITICAL_RAM_MB) {
+                showFatalDialog("Tài nguyên RAM không đủ (" + availableMB + "MB). Vui lòng đóng bớt các ứng dụng như Chrome hoặc Discord.");
+                return false;
+            }
+
+            // Điều kiện 2: Pagefile quá tải (Dấu hiệu của việc hệ thống đang swap mạnh)
+            if (swapUsagePercent > 95.0) {
+                showFatalDialog("Hệ thống đang quá tải bộ nhớ ảo (Swap > 95%). Khởi động lúc này sẽ gây treo máy.");
+                return false;
+            }
+
+            // Điều kiện 3: Cảnh báo nhưng vẫn cho chạy (Optimized Mode)
+            if (availableMB < WARNING_RAM_MB) {
+                System.out.println("[SystemGuard] CẢNH BÁO: Tài nguyên thấp. Kích hoạt chế độ Low-RAM cho Engine.");
+                // Tại đây bạn có thể set một biến flag: gameSettings.setLowRamMode(true);
+            }
+
+            return true;
+
+        } catch (Exception e) {
+            // Fallback an toàn nếu OSHI gặp sự cố
+            return Runtime.getRuntime().freeMemory() / (1024 * 1024) > 120;
+        }
+    }
+
+    private void showFatalDialog(String message) {
+        System.err.println("!!!! FATAL ERROR: " + message + " !!!!");
+        // Native Dialog để người dùng không phải nhìn console
+        javax.swing.JOptionPane.showMessageDialog(null, 
+            message, 
+            "Yanase Engine - Out of Memory", 
+            javax.swing.JOptionPane.ERROR_MESSAGE);
+    }
     @Override
     public void run() {
+        // 1. Thiết lập bẫy lỗi cho toàn bộ các Thread (Global Trap)
+        Thread.setDefaultUncaughtExceptionHandler((thread, throwable) -> {
+            handleFatalError(throwable, identifyErrorCode(throwable));
+        });
+
         try {
             init();
-            onInit(); 
+            onInit(); // Nơi xảy ra lỗi NPE "this.world is null"
             loop();
-        } catch (Exception e) {
-            e.printStackTrace();
+        } catch (Throwable t) { 
+            // 2. Bắt mọi lỗi (bao gồm cả Error và Exception) ở Thread chính
+            // và đẩy sang handleFatalError để hiện GUI
+            handleFatalError(t, identifyErrorCode(t));
         } finally {
-            cleanup();
+            // 3. Chỉ dọn dẹp bình thường nếu không phải là sập khẩn cấp
+            if (!isEmergencyClosing) {
+                cleanup();
+            }
         }
+    }
+    
+    private String identifyErrorCode(Throwable t) {
+        if (t instanceof OutOfMemoryError) {
+            return "FATAL_MEMORY_EXHAUSTED_OOM"; // Lỗi ám ảnh nhất trên máy 4GB RAM
+        }
+        if (t instanceof NullPointerException) {
+            return "NULL_POINTER_REFERENCE";
+        }
+        if (t instanceof StackOverflowError) {
+            return "STACK_OVERFLOW_RECURSION_LIMIT";
+        }
+        if (t instanceof ArrayIndexOutOfBoundsException) {
+            return "ARRAY_INDEX_OUT_OF_BOUNDS";
+        }
+        if (t.getMessage() != null && t.getMessage().contains("GLFW")) {
+            return "GLFW_WINDOW_CONTEXT_FAILURE";
+        }
+        if (t.getMessage() != null && t.getMessage().contains("OpenGL")) {
+            return "OPENGL_RENDERER_FATAL";
+        }
+        
+        // Nếu không xác định được, lấy tên Class của Exception làm mã lỗi
+        return t.getClass().getSimpleName().toUpperCase();
     }
     
     public CameraNode getMainCamera() {
@@ -171,7 +303,32 @@ public abstract class Engine implements Runnable {
     public FontRenderer getFontRenderer() {
     	return fontRenderer;
     }
+    
+    private void handleFatalError(Throwable t, String errorCode) {
+        if (this.isEmergencyClosing) return; // Tránh vòng lặp vô hạn nếu chính hàm này lỗi
+        this.isEmergencyClosing = true;
+        this.running = false;
 
+        // QUAN TRỌNG: AutoSave ngay lập tức (Theo yêu cầu: Toggle/Crash là phải Save)
+        handleAutoSave(); 
+
+        // Dọn dẹp tài nguyên Engine để nhường RAM cho CrashReport GUI
+        try {
+            if (windowHandle != NULL) {
+                glfwHideWindow(windowHandle);
+                glfwDestroyWindow(windowHandle);
+            }
+            glfwTerminate();
+        } catch (Exception ignored) {}
+
+        // Gọi hàm make (đã có CountDownLatch bên trong để chặn Main Thread)
+        vn.pmgteam.yanase.util.CrashReport.make(errorCode, 0.0, t);
+
+        // Sau khi người dùng đóng CrashReport, chương trình mới thực sự kết thúc
+        System.err.println("[TERMINATED] Engine closed via Crash Handler.");
+        System.exit(1);
+    }
+    
     private void init() {
         // --- STAGE 1: SYSTEM PRE-FLIGHT (Thông tin hệ thống & RAM) ---
         int frameWidth = 50;
@@ -189,32 +346,54 @@ public abstract class Engine implements Runnable {
         System.out.println("[PRE-INIT] Memory: " + totalMem + "MB total, " + maxMem + "MB max");
         System.out.println("==================================================");
 
-        // --- STAGE 2: GLFW & WINDOW CREATION ---
+     // --- STAGE 2: GLFW & WINDOW CREATION ---
         System.out.println("[WINDOW] Initializing GLFW...");
         if (!glfwInit()) {
-            System.err.println("[FATAL] Could not initialize GLFW!");
             throw new IllegalStateException("GLFW init failed");
         }
 
         System.out.println("[WINDOW] Applying Game Settings...");
         gameSettings.applyToEngine();
-        
-        System.out.println("[WINDOW] Creating GLFW Window: " + gameSettings.getProjectTitle());
-        windowHandle = glfwCreateWindow(
-            gameSettings.getWindowWidth(), 
-            gameSettings.getWindowHeight(), 
-            gameSettings.getProjectTitle(), NULL, NULL
-        );
+
+        // --- XỬ LÝ FULLSCREEN TẠI ĐÂY ---
+        long monitor = NULL;
+        int width = gameSettings.getWindowWidth();
+        int height = gameSettings.getWindowHeight();
+
+        if (gameSettings.getFullscreenMode()) {
+            monitor = glfwGetPrimaryMonitor(); // Lấy màn hình chính
+            GLFWVidMode vidmode = glfwGetVideoMode(monitor);
+            if (vidmode != null) {
+            	width = vidmode.width(); // Ép độ phân giải theo màn hình nếu muốn chuẩn Fullscreen
+            	height = vidmode.height();
+            }
+            System.out.println("[WINDOW] Mode: Fullscreen (" + width + "x" + height + ")");
+        } else {
+            System.out.println("[WINDOW] Mode: Windowed (" + width + "x" + height + ")");
+        }
+
+        windowHandle = glfwCreateWindow(width, height, gameSettings.getProjectTitle(), monitor, NULL);
 
         if (windowHandle == NULL) {
-            System.err.println("[FATAL] Failed to create the GLFW window!");
             throw new RuntimeException("Window creation failed");
         }
 
+        // Center window nếu không phải fullscreen
+        if (monitor == NULL) {
+            GLFWVidMode vidmode = glfwGetVideoMode(glfwGetPrimaryMonitor());
+            glfwSetWindowPos(windowHandle, (vidmode.width() - width) / 2, (vidmode.height() - height) / 2);
+        }
         // --- STAGE 3: OPENGL CONTEXT & CAPABILITIES ---
         System.out.println("[RENDER] Setting up OpenGL Context...");
         glfwMakeContextCurrent(windowHandle);
         GL.createCapabilities(); 
+        
+        // --- BỔ SUNG: Đặt Viewport ban đầu ---
+        int[] fbW = new int[1], fbH = new int[1];
+        glfwGetFramebufferSize(windowHandle, fbW, fbH);
+        glViewport(0, 0, fbW[0], fbH[0]); // <--- DÒNG NÀY SẼ SỬA LỖI
+        System.out.println("[RENDER] Initial Viewport: " + fbW[0] + "x" + fbH[0]);
+        // -------------------------------------
         
         // Sau khi có Capabilities mới lấy được thông tin Card đồ họa
         String gpuName = glGetString(GL_RENDERER);
@@ -255,6 +434,7 @@ public abstract class Engine implements Runnable {
         splashStartTime = glfwGetTime();
         lastFpsTime = splashStartTime;
         lastFrameTime = glfwGetTime();
+        this.sceneManager = new SceneManager();
 
         long loadTime = System.currentTimeMillis() - startTime;
         System.out.println("==================================================");
@@ -262,6 +442,54 @@ public abstract class Engine implements Runnable {
         System.out.println("[INIT] Boot time: " + loadTime + "ms");
         System.out.println("==================================================");
     }
+    
+    public void initForEditor(int w, int h, long existingWindowHandle) {
+        this.width = w;
+        this.height = h;
+        this.isEditorMode = true;
+        long startTime = System.currentTimeMillis();
+
+        preFlightCheck();
+
+        // KHÔNG tạo window mới — dùng window của MainStudio
+        this.windowHandle = existingWindowHandle;
+
+        fontRenderer = new FontRenderer("JetBrains Mono", 14);
+        mainCamera = new CameraNode("MainCamera");
+        mainCamera.position.set(0, 0, 5);
+        sceneRoot.appendChild(mainCamera);
+
+        this.isSplashFinished = true;
+        this.sceneManager = new SceneManager();
+        this.running = true;
+
+        System.out.println("[INIT-EDITOR] Engine Metadata Ready in " + (System.currentTimeMillis() - startTime) + "ms");
+    }
+    
+    private void preFlightCheck() {
+        // --- STAGE 1: SYSTEM PRE-FLIGHT (Logic gốc của bạn) ---
+        int frameWidth = 50;
+        
+        System.out.println("==================================================");
+        System.out.println("[PRE-INIT] Starting Yanase Engine...");
+        System.out.println("[PRE-INIT] Operating System: " + System.getProperty("os.name"));
+        System.out.println("[PRE-INIT] Java Version: " + System.getProperty("java.version"));
+        
+        // Log thông số RAM để giám sát ngưỡng 92% cho máy 4GB
+        Runtime runtime = Runtime.getRuntime();
+        long maxMem = runtime.maxMemory() / 1024 / 1024;
+        long totalMem = runtime.totalMemory() / 1024 / 1024;
+        long freeMem = runtime.freeMemory() / 1024 / 1024;
+        
+        System.out.println("[PRE-INIT] Memory: " + totalMem + "MB total, " + maxMem + "MB max");
+        System.out.println("[PRE-INIT] Free Memory: " + freeMem + "MB");
+        System.out.println("==================================================");
+    }
+
+    /**
+     * Hàm khởi tạo tương đương init() nhưng lược bỏ các thành phần 
+     * gây nặng hoặc xung đột với JavaFX/Studio.
+     */
     
     protected void setupInputCallbacks() {
         glfwSetFramebufferSizeCallback(windowHandle, (window, newWidth, newHeight) -> {
@@ -291,30 +519,42 @@ public abstract class Engine implements Runnable {
             dispatchClick(getSceneGui(), mx, my, button, action);
         });
         
-        // Trong hàm init của Engine
         glfwSetCursorPosCallback(windowHandle, (win, xpos, ypos) -> {
+            // Nếu Menu đang mở, chúng ta dừng cập nhật tọa độ chuột cho logic xoay Cam
+            if (gameSettings.isShowSettingsMenu()) {
+                this.currentMouseX = (float) xpos;
+                this.currentMouseY = (float) ypos;
+                return; // THOÁT: Không cho Camera nhận dữ liệu di chuyển này
+            }
+
             this.currentMouseX = (float) xpos;
             this.currentMouseY = (float) ypos;
-            
-            // (Tùy chọn) Bạn có thể gọi hàm checkHover ở đây
         });
         
         glfwSetKeyCallback(windowHandle, (window, key, scancode, action, mods) -> {
             if (action == GLFW_PRESS) {
                 
-                // Nếu nhấn phím ESC (ExitKey theo EngineSettings)
-                if (gameSettings.isExitKey(key)) {
-                    // Thay vì thoát: glfwSetWindowShouldClose(window, true);
-                    // Chúng ta bật/tắt menu cài đặt
-                    gameSettings.toggleSettingsMenu();
-                    
-                    // Giải phóng/Khóa chuột khi mở Menu để người dùng thao tác
-                    if (gameSettings.isShowSettingsMenu()) {
-                        glfwSetInputMode(window, GLFW_CURSOR, GLFW_CURSOR_NORMAL);
-                    } else {
-                        glfwSetInputMode(window, GLFW_CURSOR, GLFW_CURSOR_DISABLED);
-                    }
-                }
+            	if (gameSettings.isExitKey(key)) {
+            	    gameSettings.toggleSettingsMenu();
+            	    
+            	    if (sceneManager != null && sceneManager.getCurrentScene() instanceof WorldScene) {
+            	        WorldScene world = (WorldScene) sceneManager.getCurrentScene();
+            	        CameraNode player = world.getPlayer();
+            	        
+            	        if (gameSettings.isShowSettingsMenu()) {
+            	            glfwSetInputMode(window, GLFW_CURSOR, GLFW_CURSOR_NORMAL);
+            	            // Dừng ngay lập tức để nhân vật không bị trôi khi đang mở menu
+            	            if (player != null) player.getCurrentVelocity().set(0); 
+            	        } else {
+            	            glfwSetInputMode(window, GLFW_CURSOR, GLFW_CURSOR_DISABLED);
+            	            if (player != null) {
+            	                player.setMode(CameraMode.PLAYER);
+            	                // QUAN TRỌNG: Reset mốc chuột để không bị văng góc nhìn
+            	                player.setFirstMouse(true); 
+            	            }
+            	        }
+            	    }
+            	}
 
                 if (gameSettings.isDebugKey(key)) {
                     this.showDebug = !this.showDebug;
@@ -364,28 +604,6 @@ public abstract class Engine implements Runnable {
         }
     }
     
-    // Thêm vào class Engine
-    public void initForEditor(long swtHandle, int width, int height) {
-        this.width = width;
-        this.height = height;
-        this.windowHandle = swtHandle; // Gán handle từ Eclipse Canvas
-
-        // KHÔNG gọi glfwCreateWindow
-        // Chúng ta cần một thư viện cầu nối như LWJGL-SWT để bind context
-        // Hoặc sử dụng kỹ thuật "Off-screen rendering" nếu không có thư viện cầu nối
-        
-        GL.createCapabilities(); 
-        glEnable(GL_DEPTH_TEST);
-        glViewport(0, 0, width, height);
-        
-        // Bỏ qua splash để test nhanh
-        this.isSplashFinished = true;
-        
-        mainCamera = new CameraNode("EditorCamera");
-        sceneRoot.appendChild(mainCamera);
-        
-        onInit();
-    }
 
     public void updateRaycast() {
         // Chỉ thực hiện khi đang ở chế độ PLAYER (có Crosshair)
@@ -405,12 +623,27 @@ public abstract class Engine implements Runnable {
     
     private void loop() {
         while (!glfwWindowShouldClose(windowHandle)) {
+            // --- BƯỚC 0: CẬP NHẬT SỰ KIỆN TRƯỚC (QUAN TRỌNG NHẤT) ---
+            // Đưa PollEvents lên đầu để isShowSettingsMenu cập nhật ngay khi nhấn ESC
+            glfwPollEvents(); 
+            
+            // --- CẬP NHẬT VIEWPORT & SIZE (Bổ sung tại đây) ---
+            int[] fW = new int[1], fH = new int[1];
+            glfwGetFramebufferSize(windowHandle, fW, fH);
+            glViewport(0, 0, fW[0], fH[0]); // Ép OpenGL vẽ trên toàn bộ diện tích mới
+            
+            // Kiểm tra trạng thái menu ngay lập tức
+            boolean isMenuOpen = gameSettings.isShowSettingsMenu();
+
+            // Xóa màn hình
             glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
             
+            // Cập nhật thời gian
             double currentTime = glfwGetTime();
             deltaTime = (float) (currentTime - lastFrameTime);
             lastFrameTime = currentTime;
 
+            // Tính toán FPS
             currentFrames++;
             if (currentTime - lastFpsTime >= 1.0) {
                 fps = currentFrames;
@@ -427,22 +660,37 @@ public abstract class Engine implements Runnable {
                 }
             } else {
                 // --- BƯỚC 1: RENDER 3D (Thế giới game) ---
-                glEnable(GL_DEPTH_TEST); // Luôn bật Depth cho 3D
+                glEnable(GL_DEPTH_TEST);
                 renderSky(); 
+                
+                // --- BỔ SUNG: Lấy Framebuffer thật ---
+                int[] w = new int[1], h = new int[1];
+                glfwGetFramebufferSize(windowHandle, w, h);
+                // mainCamera.setAspect((float) width / (float) height); // <-- Sửa dòng này
+                mainCamera.setAspect((float) w[0] / (float) h[0]); // <-- Thành dòng này
+                
                 mainCamera.applyProjection();
                 mainCamera.applyViewMatrix(); 
                 
                 sceneRoot.updateTransform(new Matrix4f());
-                onLoop();
+                
+                // CHỈ chạy logic thế giới (Update vị trí, Camera) khi KHÔNG mở Menu
+                if (!isMenuOpen) {
+                    onLoop(); 
+                } else {
+                    // Nếu Menu mở, ép chuột hiện ra để chắc chắn không bị node nào khóa lại
+                    if (glfwGetInputMode(windowHandle, GLFW_CURSOR) != GLFW_CURSOR_NORMAL) {
+                        glfwSetInputMode(windowHandle, GLFW_CURSOR, GLFW_CURSOR_NORMAL);
+                    }
+                }
+                
                 renderRecursive(sceneRoot);
                 
                 // --- BƯỚC 2: RENDER GUI & OVERLAY (Hệ 2D) ---
-                // Tắt Depth Test một lần duy nhất ở đây cho toàn bộ UI
                 glDisable(GL_DEPTH_TEST);
                 glEnable(GL_BLEND);
                 glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
 
-                // Chuyển sang Ortho (2D)
                 glMatrixMode(GL_PROJECTION); 
                 glPushMatrix(); 
                 glLoadIdentity();
@@ -452,96 +700,140 @@ public abstract class Engine implements Runnable {
                 glPushMatrix(); 
                 glLoadIdentity();
 
-                // Vẽ các thành phần 2D theo thứ tự từ dưới lên trên
+                // Vẽ các thành phần 2D
                 if (sceneGui != null) {
                     renderRecursive2D(sceneGui);
                 }
 
-                // Vẽ Tâm ngắm (Crosshair)
-                if (mainCamera.getMode() == CameraMode.PLAYER) {
+                // Chỉ vẽ Crosshair khi đang chơi và không mở Menu
+                if (!isMenuOpen && mainCamera.getMode() == CameraMode.PLAYER) {
                     renderCrosshair();
                 }
 
-                // Vẽ Debug Info (Bảng thông số góc trái)
                 if (showDebug) {
                     renderDebugInfo(); 
                 }
 
                 // Vẽ Menu Settings (Phủ đen toàn màn hình)
-                if (gameSettings.isShowSettingsMenu()) {
+                if (isMenuOpen) {
                     renderEngineSettingsOverlay();
                 }
 
-                // KẾT THÚC 2D: Khôi phục ma trận về 3D
                 glMatrixMode(GL_PROJECTION); 
                 glPopMatrix();
                 glMatrixMode(GL_MODELVIEW); 
                 glPopMatrix();
                 
-                // Bật lại trạng thái mặc định cho frame tiếp theo
                 glEnable(GL_DEPTH_TEST);
                 glDisable(GL_BLEND);
 
                 // --- BƯỚC 3: LOGIC HẬU RENDER (Raycast, Collision) ---
-                collidableObjects.clear();
-                updateCollidableList(sceneRoot);
+                // Chỉ xử lý Raycast khi không mở Menu để tránh click xuyên thấu vào thế giới
+                if (!isMenuOpen) {
+                    collidableObjects.clear();
+                    updateCollidableList(sceneRoot);
 
-                if (mainCamera.getMode() == CameraMode.PLAYER) {
-                    updateRaycast();
-                    if (hoveredObject != null) {
-                        if (glfwGetMouseButton(windowHandle, GLFW_MOUSE_BUTTON_LEFT) == GLFW_PRESS) {
-                            this.selectedNode = hoveredObject; 
+                    if (mainCamera.getMode() == CameraMode.PLAYER) {
+                        updateRaycast();
+                        if (hoveredObject != null) {
+                            if (glfwGetMouseButton(windowHandle, GLFW_MOUSE_BUTTON_LEFT) == GLFW_PRESS) {
+                                this.selectedNode = hoveredObject; 
+                            }
                         }
                     }
                 }
             }
             
-            // Lấy dữ liệu RAM thực tế từ osBean (com.sun.maWnagement.OperatingSystemMXBean)
-			long totalPhys = osBean.getTotalPhysicalMemorySize();
-            long freePhys = osBean.getFreePhysicalMemorySize();
-            double ramUsagePercent = ((double) (totalPhys - freePhys) / totalPhys) * 100.0;
-            long usedPhys = totalPhys - freePhys; // Tính toán lượng RAM đã dùng
-
-            if (ramUsagePercent >= 95.0 && !isEmergencyClosing) {
-                isEmergencyClosing = true;
-
-                // Ngắt xử lý logic nặng ngay lập tức
-                //Engine.getEngine().getLogicThread().interrupt();
-
-                // Ẩn cửa sổ để giảm tải GPU Shared RAM
-                glfwHideWindow(windowHandle);
-
-                // Sử dụng System.err với chuỗi thô để tránh tạo thêm Object String phức tạp
-                System.err.print("[EMERGENCY] RAM LIMIT REACHED: ");
-                System.err.println(ramUsagePercent);
-
-                // Thực hiện AutoSave khẩn cấp 
-                // Lưu ý: Module Manager cần kiểm tra biến isEmergencyClosing này
-
-                vn.pmgteam.yanase.util.CrashReport.make(
-                    vn.pmgteam.yanase.util.CrashReport.ERR_EMERGENCY_EXIT,
-                    ramUsagePercent
-                );
-
-                // Yêu cầu đóng và thoát vòng lặp chính
-                glfwSetWindowShouldClose(windowHandle, true);
-                
-                // Ném lỗi để ngắt stack hiện tại nếu cần
-                throw new vn.pmgteam.yanase.memory.WeakMemoryError("Critical RAM Usage", usedPhys, totalPhys);
-            }
+            // --- BƯỚC 4: KIỂM TRA RAM KHẨN CẤP ---
+            checkRamEmergency();
             
+            // Hoàn tất frame
             glfwSwapBuffers(windowHandle);
-            glfwPollEvents();
             handleAutoSave();
+        }
+    }
+    
+    public void update() {
+        if (!running) return;
+        
+        // Cập nhật DeltaTime
+        double currentTime = glfwGetTime();
+        deltaTime = (float) (currentTime - lastFrameTime);
+        lastFrameTime = currentTime;
+
+        // Logic xử lý chính (onLoop được triển khai ở lớp con)
+        onLoop(); 
+    }
+
+    public void renderToBuffer(java.nio.IntBuffer targetBuffer) {
+        if (!running || targetBuffer == null || !targetBuffer.isDirect()) return;
+        
+        // Đảm bảo Viewport khớp với kích thước ảnh
+        glViewport(0, 0, width, height);
+        
+        glClearColor(0.1f, 0.1f, 0.12f, 1.0f); 
+        glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
+
+        // Render 3D
+        glEnable(GL_DEPTH_TEST);
+        renderSky(); 
+        mainCamera.applyProjection();
+        mainCamera.applyViewMatrix(); 
+        
+        worldMatrix.identity();
+        sceneRoot.updateTransform(worldMatrix);
+        renderRecursive(sceneRoot);
+
+        // Render 2D Overlay
+        glDisable(GL_DEPTH_TEST);
+        if (showDebug) renderDebugInfo();
+        glEnable(GL_DEPTH_TEST);
+
+        checkRamEmergency();
+
+        // Đồng bộ và copy
+        glFlush();
+        glFinish(); 
+        targetBuffer.rewind(); 
+        glReadPixels(0, 0, width, height, GL_BGRA, GL_UNSIGNED_INT_8_8_8_8_REV, targetBuffer);
+    }
+
+    /**
+     * Tách logic kiểm tra RAM để loop chính gọn gàng hơn
+     */
+    private void checkRamEmergency() {
+        long totalPhys = osBean.getTotalPhysicalMemorySize();
+        long freePhys = osBean.getFreePhysicalMemorySize();
+        double ramUsagePercent = ((double) (totalPhys - freePhys) / totalPhys) * 100.0;
+        long usedPhys = totalPhys - freePhys;
+
+        if (ramUsagePercent >= 95.0 && !isEmergencyClosing) {
+            isEmergencyClosing = true;
+            glfwHideWindow(windowHandle);
+            System.err.println("[EMERGENCY] RAM LIMIT REACHED: " + ramUsagePercent + "%");
+
+            try {
+                // Logic load block hoặc phát video mp4 ở đây
+            } catch (Throwable t) {
+                vn.pmgteam.yanase.util.CrashReport.make(
+                    vn.pmgteam.yanase.util.CrashReport.ERR_OPENGL_FATAL,
+                    ramUsagePercent,
+                    t // <--- Truyền t để hiện Stack Trace màu đỏ rực kiểu MC
+                );
+            }
+
+            glfwSetWindowShouldClose(windowHandle, true);
+            throw new vn.pmgteam.yanase.memory.WeakMemoryError("Critical RAM Usage", usedPhys, totalPhys);
         }
     }
     
     private void renderEngineSettingsOverlay() {
         glDisable(GL_DEPTH_TEST);
         glEnable(GL_BLEND);
+        glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
         
-        // 1. Vẽ lớp nền tối mờ (Dim Background)
-        glColor4f(0.0f, 0.0f, 0.0f, 0.7f); // Đen trong suốt 70%
+        // 1. Vẽ lớp nền tối mờ
+        glColor4f(0.0f, 0.0f, 0.0f, 0.75f); 
         glBegin(GL_QUADS);
             glVertex2f(0, 0);
             glVertex2f(width, 0);
@@ -549,19 +841,19 @@ public abstract class Engine implements Runnable {
             glVertex2f(0, height);
         glEnd();
 
-        // 2. Tiêu đề Menu
-        glColor4f(1.0f, 1.0f, 1.0f, 1.0f);
-        String title = "ENGINE SETTINGS";
-        float titleX = (width - fontRenderer.getStringWidth(title)) / 2;
-        drawDebugLine(title, titleX, height / 4);
+        // 2. Tiêu đề
+        glColor4f(0.2f, 0.6f, 1.0f, 1.0f); // Màu xanh Cyan nhẹ
+        String title = "--- ENGINE SETTINGS ---";
+        drawDebugLine(title, (width - fontRenderer.getStringWidth(title)) / 2, height / 4);
 
-        // 3. Hiển thị các tùy chọn (Ví dụ: VSync, MSAA...)
-        drawDebugLine("1. VSync: " + (gameSettings.getVsyncInt() == 1 ? "ON" : "OFF"), width / 3, height / 2);
-        drawDebugLine("2. MSAA: " + gameSettings.getMSAALevel() + "x", width / 3, height / 2 + 30);
-        drawDebugLine("Press ESC to Return", width / 3, height / 2 + 90);
+        // 3. Các tùy chọn có thể Toggle
+        glColor4f(1.0f, 1.0f, 1.0f, 1.0f);
+        drawDebugLine("[F1] VSync: " + (gameSettings.isVsyncEnabled() ? "ENABLED" : "DISABLED"), width / 3, height / 2);
+        drawDebugLine("[F2] MSAA:  " + gameSettings.getMSAALevel() + "x", width / 3, height / 2 + 30);
+        drawDebugLine("[F3] Debug: " + (showDebug ? "VISIBLE" : "HIDDEN"), width / 3, height / 2 + 60);
         
-        // Nếu bạn đã có hệ thống UI Node (BaseNode), bạn có thể render nó ở đây
-        // renderRecursive2D(settingsGuiNode);
+        glColor4f(0.7f, 0.7f, 0.7f, 1.0f);
+        drawDebugLine("Press ESC to Close", width / 3, height / 2 + 120);
 
         glEnable(GL_DEPTH_TEST);
     }
@@ -685,101 +977,105 @@ public abstract class Engine implements Runnable {
     }
     
     protected void renderRecursive2D(Node node) {
+        // 1. Chỉ render nếu là Object2D
         if (node instanceof vn.pmgteam.yanase.node.Object2D) {
             ((vn.pmgteam.yanase.node.Object2D) node).render2D();
         }
 
-        org.w3c.dom.NodeList childrenList = node.getChildNodes();
-        int count = childrenList.getLength();
-        for (int i = 0; i < count; i++) {
-            renderRecursive2D(childrenList.item(i));
+        // 2. DUYỆT THEO DANH SÁCH CỦA ENGINE (Tránh dùng getChildNodes() của DOM)
+        if (node instanceof BaseNode) {
+            BaseNode baseNode = (BaseNode) node;
+            for (BaseNode child : baseNode.getChildren()) {
+                renderRecursive2D(child);
+            }
         }
     }
     
     private void renderSplashScreen() {
         double elapsedTime = glfwGetTime() - splashStartTime;
-        float alpha = 1.0f;
+        float alpha = getAlpha(elapsedTime);
 
-        // Logic Fade Out sau 3 giây
-        if (elapsedTime <= 3.0) {
-            alpha = 1.0f;
-        } else if (elapsedTime <= 4.0) {
-            alpha = (float)(1.0 - (elapsedTime - 3.0));
-        } else {
-            alpha = 0.0f;
-        }
-
-        // 1. Nạp tài nguyên nếu chưa có
+        // --- 1. RESOURCE INITIALIZATION ---
         if (splashTextureId == -1) {
             splashTextureId = TextureManager.loadTexture("/assets/yanase-splash.jpg");
         }
         if (splashFont == null) {
-            // Sử dụng font hệ thống thanh mảnh, size nhỏ vừa phải (khoảng 18-20)
             splashFont = new FontRenderer("Segoe UI", 18);
         }
+        if (splashFont == null) return;
 
-        int ww = gameSettings.getWindowWidth();   
-        int wh = gameSettings.getWindowHeight();  
+        // --- 2. UPDATE VIEWPORT & DYNAMIC SIZING ---
+        // Lấy kích thước thật từ Framebuffer để tránh lỗi trên màn hình High-DPI hoặc khi đổi Resolution
+        int[] fbW = new int[1], fbH = new int[1];
+        glfwGetFramebufferSize(windowHandle, fbW, fbH);
+        int ww = fbW[0];
+        int wh = fbH[0];
 
+        // Cập nhật Viewport ngay lập tức
         glViewport(0, 0, ww, wh); 
+        
         glClearColor(0.0f, 0.0f, 0.0f, 1.0f);
         glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
 
-        glMatrixMode(GL_PROJECTION); glLoadIdentity();
-        glOrtho(0, (double)ww, (double)wh, 0, -1, 1); 
-        glMatrixMode(GL_MODELVIEW); glLoadIdentity();
+        // Thiết lập Ortho khớp hoàn toàn với kích thước mới
+        glMatrixMode(GL_PROJECTION); 
+        glLoadIdentity();
+        glOrtho(0, ww, wh, 0, -1, 1); 
+        
+        glMatrixMode(GL_MODELVIEW); 
+        glLoadIdentity();
 
-        // 2. Vẽ Image Splash (Giữ nguyên logic Fit của bạn)
-        float imgW = 1280.0f; 
-        float imgH = 720.0f;
-        float imgAspect = imgW / imgH;
-        float winAspect = (float)ww / (float)wh;
-        float drawW, drawH;
-
-        if (winAspect > imgAspect) {
-            drawH = (float)wh; 
-            drawW = drawH * imgAspect;
-        } else {
-            drawW = (float)ww; 
-            drawH = drawW / imgAspect;
-        }
-
-        float x = ((float)ww - drawW) / 2.0f;
-        float y = ((float)wh - drawH) / 2.0f;
-
+        // --- 3. RENDER MAIN LOGO (Tự động căn giữa theo ww, wh mới) ---
         glEnable(GL_BLEND);
         glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
         glDisable(GL_DEPTH_TEST);
+
+        float imgW = 800.0f; 
+        float imgH = 450.0f;
         
+        // Đảm bảo logo không to hơn màn hình nếu user để Res thấp
+        if (imgW > ww) {
+            float scale = (float)ww / imgW;
+            imgW *= scale;
+            imgH *= scale;
+        }
+
+        float x = (ww - imgW) / 2.0f;
+        float y = (wh - imgH) / 2.0f;
+
         glEnable(GL_TEXTURE_2D);
         glBindTexture(GL_TEXTURE_2D, splashTextureId);
         glColor4f(1.0f, 1.0f, 1.0f, alpha); 
 
         glBegin(GL_QUADS);
             glTexCoord2f(0, 0); glVertex2f(x, y);
-            glTexCoord2f(1, 0); glVertex2f(x + drawW, y);
-            glTexCoord2f(1, 1); glVertex2f(x + drawW, y + drawH);
-            glTexCoord2f(0, 1); glVertex2f(x, y + drawH);
+            glTexCoord2f(1, 0); glVertex2f(x + imgW, y);
+            glTexCoord2f(1, 1); glVertex2f(x + imgW, y + imgH);
+            glTexCoord2f(0, 1); glVertex2f(x, y + imgH);
         glEnd();
 
-        // 3. Vẽ Text "Created with Yanase Engine"
-        // Lấy dữ liệu texture của text (đảm bảo hàm này có cache để tránh tràn VRAM)
-        var textData = splashFont.getStringTextureData("Created with Yanase Engine", java.awt.Color.BLACK);
+        // --- 4. RENDER SUBTITLE TEXT ---
+        var textData = splashFont.getStringTextureData("Created with Yanase Engine", java.awt.Color.WHITE);
+        if (textData != null) {
+            float textX = (ww - textData.width) / 2.0f;
+            float textY = y + imgH + 40; 
+            glColor4f(1.0f, 1.0f, 1.0f, alpha);
+            splashFont.drawCachedTexture(textData.id, textX, textY, textData.width, textData.height);
+        }
 
-        // Vị trí: Góc dưới bên phải, cách lề 30px
-        float textX = (float)ww - textData.width - 30;
-        float textY = (float)wh - textData.height - 30;
-
-        // Quan trọng: Phải Bind lại texture của Font trước khi vẽ text
-        // Vì lệnh vẽ Quads ở trên đang Bind splashTextureId
-        glColor4f(1.0f, 1.0f, 1.0f, alpha); // Đồng bộ độ mờ với logo
-        splashFont.drawCachedTexture(textData.id, textX, textY, textData.width, textData.height);
-
-        // 4. Reset trạng thái
+        // --- 5. CLEANUP ---
         glColor4f(1.0f, 1.0f, 1.0f, 1.0f);
-        glEnable(GL_DEPTH_TEST);
         glDisable(GL_TEXTURE_2D);
         glDisable(GL_BLEND);
+        glEnable(GL_DEPTH_TEST);
+    }
+    
+    private float getAlpha(double time) {
+        // Fade In: 1s | Stay: 2s | Fade Out: 1s
+        if (time <= 1.0) return (float) time;
+        if (time <= 3.0) return 1.0f;
+        if (time <= 4.0) return (float) (1.0 - (time - 3.0));
+        return 0.0f;
     }
     
     protected void renderCrosshair() {
@@ -911,6 +1207,7 @@ public abstract class Engine implements Runnable {
         glEnable(GL_DEPTH_TEST);
         glColor4f(1, 1, 1, 1);
     }
+    
     private void setSkyColor(float y, float[] zenith, float[] horizon, float[] ground) {
         // y chạy từ 1 (đỉnh) xuống -1 (đáy)
         if (y >= 0) {
@@ -981,6 +1278,39 @@ public abstract class Engine implements Runnable {
         System.out.println("=========================================");
         System.out.println("| Status: Yanase Engine Terminated.     |");
         System.out.println("=========================================");
+    }
+    
+    public void editorCleanup() {
+        this.running = false; // Dừng vòng lặp Virtual Thread ngay lập tức
+
+        // 1. Chỉ hiển thị màn hình đóng nếu KHÔNG phải Editor Mode
+        if (!isEditorMode && windowHandle != NULL) {
+            renderClosingScreen();
+            try { Thread.sleep(500); } catch (InterruptedException e) {}
+        }
+
+        // 2. Logic dọn dẹp của lớp con (onCleanup là abstract/protected)
+        onCleanup(); 
+
+        // 3. Dọn dẹp tài nguyên GPU (Mesh, Texture)
+        if (sceneRoot != null) sceneRoot.cleanup(); 
+        if (sceneGui != null) sceneGui.cleanup(); 
+
+        // 4. Giải phóng Font
+        if (debugFont != null) debugFont.cleanup(); 
+        if (fontRenderer != null) fontRenderer.cleanup();
+
+        // 5. Quản lý Window Context
+        if (windowHandle != NULL) {
+            glfwDestroyWindow(windowHandle);
+            windowHandle = NULL;
+        }
+
+        // QUAN TRỌNG: Chỉ Terminate khi đóng toàn bộ ứng dụng (Studio)
+        // Nếu gọi ở đây, bạn sẽ không thể mở lại tab Editor thứ 2
+        // glfwTerminate(); 
+        
+        System.out.println("[CLEANUP] Yanase Engine resources released safely.");
     }
 
     private void renderClosingScreen() {

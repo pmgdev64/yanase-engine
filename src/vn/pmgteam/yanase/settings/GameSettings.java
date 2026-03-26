@@ -7,7 +7,7 @@ import vn.pmgteam.yanase.base.render.RenderingHints;
 public class GameSettings {
     
     private Engine engine;
-    private String engineVersion = "0.0.1";
+    private String engineVersion = "0.0.2";
     private String projectTitle = "Yanase Project";
     
     // --- CẤU HÌNH ĐỒ HỌA ---
@@ -21,8 +21,14 @@ public class GameSettings {
     
     private boolean dirty = false;
     
+    public boolean isVsyncEnabled() {
+        return enableVsync;
+    }
+    
     // Trong GameSettings.java
     private boolean showSettingsMenu = false;
+    
+    private boolean fullscreenMode = false;
 
     // --- CẤU HÌNH PHÍM BẤM (KEYBINDINGS) ---
     // Chúng ta đặt mặc định các phím phổ biến
@@ -43,6 +49,14 @@ public class GameSettings {
     
     public int getKeyToggleDebug() { return keyToggleDebug; }
     public void setKeyToggleDebug(int key) { this.keyToggleDebug = key; }
+    
+    public boolean getFullscreenMode() {
+    	 return fullscreenMode;
+    }
+    
+    public void setFullscreenMode(boolean isFullscreen) {
+    	this.fullscreenMode = isFullscreen;
+    }
 
     public int getKeyEmergencyExit() { return keyEmergencyExit; }
     public void setKeyEmergencyExit(int key) { this.keyEmergencyExit = key; }

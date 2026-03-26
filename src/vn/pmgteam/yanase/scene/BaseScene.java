@@ -1,8 +1,8 @@
 package vn.pmgteam.yanase.scene;
 
 import vn.pmgteam.yanase.node.BaseNode;
-import vn.pmgteam.yanase.node.GroupNode;
 import vn.pmgteam.yanase.node.Object3D;
+import vn.pmgteam.yanase.node.subnodes.GroupNode;
 
 public abstract class BaseScene {
     protected String name;
